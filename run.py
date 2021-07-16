@@ -1,9 +1,13 @@
+#!/usr/bin/env python
 import os
 import re
 import time
 import shutil
 import unidecode
+import csv
 from contextlib import contextmanager
+import sqlite3
+import click
 import selenium
 from selenium.webdriver.common.by import By
 #from selenium.webdriver.chrome.options import Options
@@ -14,7 +18,24 @@ DATA_DIR = os.path.join(HERE, 'data')
 
 YEARS_RANGE=range(2010, 2021+1)
 
-def execute(driver):
+@click.group()
+def main():
+    pass
+
+@main.command("all")
+def cmd_all():
+    download_data()
+    import_data()
+
+
+@main.command("download_data")
+def cmd_download_data():
+    download_data()
+
+def download_data(driver):
+    if os.path.exists(DOWNLOAD_DIR):
+        shutil.rmtree(DOWNLOAD_DIR)
+    driver = init_driver()
     driver.get('https://www.adrreports.eu/en/search_subst.html')
     all_buts_el = find_el(driver, '#alphabetnavigation')
     for letter_link_el in find_els(all_buts_el, 'a'):
@@ -38,7 +59,7 @@ def execute(driver):
                     linelist_el = wait_el(lambda: find_el(driver, 'td[title="Line Listing"]'))
                     linelist_el.click()
                     for year in YEARS_RANGE:
-                        ofpath = os.path.join(DATA_DIR, f"{norm_fname(subst)}_{year}.xls")
+                        ofpath = os.path.join(DATA_DIR, f"{norm_fname(subst)}_{year}.csv")
                         if os.path.exists(ofpath):
                             continue
                         year_inputs = wait_el(lambda: find_el(driver, 'input[title="2021"]'))
@@ -61,12 +82,79 @@ def execute(driver):
                                 ofpath
                             )
                             return
-    #global driver
-    #driver.get('https://www.adrreports.eu/en/search_subst.html')
-    #time.sleep(7)
-    #element = driver.find_element_by_xpath('//*[@id="app"]/div/div/div/section/div/div[2]/article/div[2]/button')
-    #element.click()
-    #time.sleep(3)
+    #driver.quit()
+
+
+@main.command("import_data")
+@click.option("--force", is_flag=True)
+def cmd_import_data(force):
+    init_db(force=force)
+    import_data()
+
+def db_connect():
+    return sqlite3.connect(os.path.join(HERE, "data.sqlite"))
+
+def init_db(force=False):
+    with db_connect() as conn:
+        cur = conn.cursor()
+        cur.execute('''CREATE TABLE IF NOT EXISTS reports(subst text, year integer, report_id text, date text, age_group text, sex text)''')
+        cur.execute('''CREATE TABLE IF NOT EXISTS reactions(subst text, year integer, report_id text, type text, duration text, outcome text, seriousness text)''')
+        if force:
+            cur.execute('''DELETE FROM reports''')
+            cur.execute('''DELETE FROM reactions''')
+
+def import_data():
+    with db_connect() as conn:
+        for fname in os.listdir(DATA_DIR):
+            basefname, fext = os.path.splitext(fname)
+            if fext != '.csv': continue
+            pos = basefname.rfind('_')
+            subst = basefname[:pos]
+            year = int(basefname[pos+1:])
+            row = conn.cursor().execute(
+                '''SELECT COUNT(*) FROM reports WHERE subst=? AND year=?''',
+                [subst, year]
+            ).fetchone()
+            if row[0] > 0:
+                continue
+            with open(os.path.join(DATA_DIR, fname)) as csvfile:
+                reader = csv.DictReader(csvfile)
+                reports_rows, reactions_rows = [], []
+                def _insert():
+                    nonlocal reports_rows, reactions_rows
+                    db_bulk_insert(conn, "reports", reports_rows)
+                    db_bulk_insert(conn, "reactions", reactions_rows)
+                    reports_rows, reactions_rows = [], []
+                for row in reader:
+                    reports_rows.append({
+                        "subst": subst,
+                        "year": year,
+                        "report_id": row["\ufeff\ufeffEU Local Number"],
+                        "date": row["EV Gateway Receipt Date"],
+                        "age_group": row["Patient Age Group"],
+                        "sex": row["Patient Sex"],
+                    })
+                    reactions = row["Reaction List PT (Duration – Outcome - Seriousness Criteria)"].split(",<BR><BR>")
+                    for reaction in reactions:
+                        reaction = reaction.strip()
+                        _type, other = reaction.split("(")
+                        duration, outcome, seriousness = other[:-1].split("-")
+                        reactions_rows.append({
+                            "subst": subst,
+                            "year": year,
+                            "report_id": row["\ufeff\ufeffEU Local Number"],
+                            "type": _type.strip(),
+                            "duration": duration.strip(),
+                            "outcome": outcome.strip(),
+                            "seriousness": seriousness.strip(),
+                        })
+                    if len(reports_rows) >= 100:
+                        _insert()
+                _insert()
+
+
+
+
 
 def is_vax_subst(subst):
     return "vaccine" in subst.lower()
@@ -140,7 +228,6 @@ def wait_download(timeout=300):
         if sleep_time > timeout:
             return
 
-
 @contextmanager
 def switch_to_next_tab(driver, tab_num):
     driver.switch_to.window(driver.window_handles[tab_num])
@@ -150,10 +237,13 @@ def switch_to_next_tab(driver, tab_num):
         driver.close()
         driver.switch_to.window(driver.window_handles[tab_num-1])
 
+def db_bulk_insert(conn, table_name, values):
+    if len(values) == 0:
+        return
+    conn.cursor().executemany(
+        f"INSERT INTO {table_name} ({','.join(values[0].keys())}) VALUES ({','.join('?' for _ in range(len(values[0])))})",
+        [list(v.values()) for v in values])
+
 
 if __name__ == "__main__":
-    if os.path.exists(DOWNLOAD_DIR):
-        shutil.rmtree(DOWNLOAD_DIR)
-    driver = init_driver()
-    execute(driver)
-    #driver.quit()
+    main()
