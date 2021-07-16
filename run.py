@@ -320,8 +320,8 @@ def plot_reactions_by_year_c19(severe=False, death=False):
         res = {}
         for is_c19_vax, year, nb in rows:
             res.setdefault(bool(is_c19_vax), {})[year] = nb
-        plt.bar(res[True].keys(), [a+b for a, b in zip(res[False].values(), res[True].values())], label="C19 vax")
-        plt.bar(res[False].keys(), res[False].values(), label="All other vax")
+        plt.bar(res[True].keys(), [a+b for a, b in zip(res[False].values(), res[True].values())], label="Vaccins Covid19")
+        plt.bar(res[False].keys(), res[False].values(), label="Tous les autres vaccins")
         plt.legend()
         fname = 'reactions_by_year_c19.png'
         if severe:
