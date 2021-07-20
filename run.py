@@ -4,6 +4,7 @@ import re
 import time
 import shutil
 import unidecode
+import collections as col
 import csv
 from contextlib import contextmanager
 import sqlite3
@@ -310,18 +311,28 @@ def plot_reactions_by_year_c19(severe=False, death=False):
         title = "Nombre de morts post-vaccinales"
     plt.title(title)
     with db_connect() as conn:
-        req = 'SELECT is_c19_vax, year, count(*) FROM reports'
+        req = 'SELECT subst, year, is_c19_vax, COUNT(*) FROM reports '
         if severe:
             req += f' WHERE severe=1'
         if death:
             req += f' WHERE death=1'
-        req += ' GROUP BY is_c19_vax, year'
+        req += ' GROUP BY subst, year, is_c19_vax'
         rows = conn.cursor().execute(req)
-        res = {}
-        for is_c19_vax, year, nb in rows:
-            res.setdefault(bool(is_c19_vax), {})[year] = nb
-        plt.bar(res[True].keys(), [a+b for a, b in zip(res[False].values(), res[True].values())], label="Vaccins Covid19")
-        plt.bar(res[False].keys(), res[False].values(), label="Tous les autres vaccins")
+        def _get_label(subst, is_c19_vax):
+            if not is_c19_vax: return "Tous les autres vaccins (non Covid19)"
+            elif 'ASTRAZENECA' in subst: return 'Astrazeneca'
+            elif 'MODERNA' in subst: return 'Moderna'
+            elif 'PFIZER' in subst: return 'Pfizer'
+            elif 'JANSSEN' in subst: return 'Janssen'
+            else: raise Exception(f"Unknown subst '{subst}'")
+        res = col.defaultdict(lambda: col.defaultdict(int))
+        for subst, year, is_c19_vax, nb in rows:
+            res[_get_label(subst, is_c19_vax)][year] += nb
+        years = range(2010, 2021+1)
+        labels = ['Tous les autres vaccins (non Covid19)', 'Astrazeneca', 'Moderna', 'Pfizer', 'Janssen']
+        cum_bars = _cum_bars(years, labels, res)
+        for label in reversed(labels):
+            plt.bar(years, [cum_bars[label].get(year,0) for year in years], label=label)
         plt.legend()
         fname = 'reactions_by_year_c19.png'
         if severe:
@@ -329,6 +340,16 @@ def plot_reactions_by_year_c19(severe=False, death=False):
         if death:
             fname = 'reactions_by_year_c19_death.png'
         plt.savefig(os.path.join(HERE, f'results/{fname}'))
+
+
+def _cum_bars(xs, labels, vals):
+    res = col.defaultdict(lambda: col.defaultdict(int))
+    for x in xs:
+        cum_val = 0
+        for label in labels:
+            res[label][x] = vals[label][x] + cum_val
+            cum_val = res[label][x]
+    return res
 
 
 
