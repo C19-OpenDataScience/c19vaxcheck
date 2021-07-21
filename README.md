@@ -12,6 +12,8 @@ On peut observer une amplitude bien plus importante pour les vaccins Covid19, su
 
 ![Morts post-vaccinales](results/reactions_by_year_c19_death.png)
 
+![Morts post-vaccinales, 65 and et plus](results/reactions_by_year_c19_death_65.png)
+
 ## How to use
 
 * Install [Python](https://www.python.org)

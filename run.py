@@ -26,8 +26,8 @@ def main():
 
 @main.command("all")
 def cmd_all():
-    download_data()
-    import_data()
+    #download_data()
+    #import_data()
     plot_reactions_by_year_c19()
     plot_reactions_by_year_c19(severe=True)
     plot_reactions_by_year_c19(death=True)
@@ -299,23 +299,25 @@ def db_bulk_insert(conn, table_name, values):
 @main.command("plot_reactions_by_year_c19")
 @click.option("--severe", is_flag=True)
 @click.option("--death", is_flag=True)
-def cmd_plot_reactions_by_year_c19(severe, death):
-    plot_reactions_by_year_c19(severe=severe, death=death)
+@click.option("--aged-65-and-more", is_flag=True)
+def cmd_plot_reactions_by_year_c19(severe, death, aged_65_and_more):
+    plot_reactions_by_year_c19(severe=severe, death=death, aged_65_and_more=aged_65_and_more)
 
-def plot_reactions_by_year_c19(severe=False, death=False):
+def plot_reactions_by_year_c19(severe=False, death=False, aged_65_and_more=False):
     plt.clf()
     title = "Nombre de réactions post-vaccinales"
-    if severe:
-        title = "Nombre de réactions sévères post-vaccinales"
-    if death:
-        title = "Nombre de morts post-vaccinales"
+    if severe: title += ", sévères"
+    if death: title += ", morts"
+    if aged_65_and_more: title += ", 65 ans et +"
     plt.title(title)
     with db_connect() as conn:
         req = 'SELECT subst, year, is_c19_vax, COUNT(*) FROM reports '
-        if severe:
-            req += f' WHERE severe=1'
-        if death:
-            req += f' WHERE death=1'
+        wheres = []
+        if severe: wheres.append('severe=1')
+        if death: wheres.append('death=1')
+        if death: wheres.append('age_group IN ("65-85 Years", "More than 85 Years")')
+        if wheres:
+            req += " WHERE " + " AND ".join(wheres)
         req += ' GROUP BY subst, year, is_c19_vax'
         rows = conn.cursor().execute(req)
         def _get_label(subst, is_c19_vax):
@@ -334,12 +336,11 @@ def plot_reactions_by_year_c19(severe=False, death=False):
         for label in reversed(labels):
             plt.bar(years, [cum_bars[label].get(year,0) for year in years], label=label)
         plt.legend()
-        fname = 'reactions_by_year_c19.png'
-        if severe:
-            fname = 'reactions_by_year_c19_severe.png'
-        if death:
-            fname = 'reactions_by_year_c19_death.png'
-        plt.savefig(os.path.join(HERE, f'results/{fname}'))
+        fname = 'reactions_by_year_c19'
+        if severe: fname += '_severe'
+        if death: fname += '_death'
+        if aged_65_and_more: fname += '_65'
+        plt.savefig(os.path.join(HERE, f'results/{fname}.png'))
 
 
 def _cum_bars(xs, labels, vals):
