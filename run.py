@@ -39,8 +39,8 @@ def cmd_download_data():
     download_data()
 
 def download_data():
-    if os.path.exists(DOWNLOAD_DIR):
-        shutil.rmtree(DOWNLOAD_DIR)
+    rmdir(DOWNLOAD_DIR)
+    mkdir(DATA_DIR)
     def _ofpath(subst, year, ext):
         return os.path.join(DATA_DIR, f"{norm_fname(subst)}_{year}.{ext}")
     driver = init_driver()
@@ -100,7 +100,7 @@ def download_data():
                                         no_data_el = find_el(driver, 'div[result="noData"]')
                                         if no_data_el:
                                             raise NoDataError()
-                                    report_but = wait_el(_try_find_report_but, timeout=3)
+                                    report_but = wait_el(_try_find_report_but, timeout=60)
                                     report_but.click()
                                     data_but = wait_el(lambda: find_el(driver, 'a[aria-label="Data"]'), timeout=3)
                                     data_but.click()
@@ -179,10 +179,7 @@ def wait_el(getter, timeout=60):
 def wait_download(timeout=300):
     sleep_period = .5
     sleep_time = 0
-    try:
-        os.makedirs(DOWNLOAD_DIR)
-    except FileExistsError:
-        pass
+    mkdir(DOWNLOAD_DIR)
     while True:
         fnames = [name for name in os.listdir(DOWNLOAD_DIR) if os.path.isfile(os.path.join(DOWNLOAD_DIR, name))]
         if len(fnames) == 1:
@@ -190,7 +187,7 @@ def wait_download(timeout=300):
         time.sleep(sleep_period)
         sleep_time += sleep_period
         if sleep_time > timeout:
-            return
+            raise Exception("Download failed")
 
 @contextmanager
 def switch_to_next_tab(driver, tab_num):
@@ -208,6 +205,17 @@ def retry(nb_tries, Err, fun):
         except Err:
             continue
         break
+
+def rmdir(path):
+    if os.path.exists(path):
+        shutil.rmtree(path)
+
+def mkdir(path):
+    try:
+        os.makedirs(path)
+    except FileExistsError:
+        pass
+
 
 
 
@@ -305,7 +313,7 @@ def cmd_plot_reactions_by_year_c19(severe, death, aged_65_and_more):
 
 def plot_reactions_by_year_c19(severe=False, death=False, aged_65_and_more=False):
     plt.clf()
-    title = "Nombre de réactions post-vaccinales"
+    title = "[EudraVigilance] Nombre de réactions post-vaccinales"
     if severe: title += ", sévères"
     if death: title += ", morts"
     if aged_65_and_more: title += ", 65 ans et +"
