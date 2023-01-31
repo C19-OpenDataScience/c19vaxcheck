@@ -18,7 +18,7 @@ HERE = os.path.abspath(os.path.dirname(__file__))
 DOWNLOAD_DIR = os.path.join(HERE, '_download')
 DATA_DIR = os.path.join(HERE, 'data')
 
-YEARS_RANGE=range(2010, 2021+1)
+YEARS_RANGE=range(2010, 2022+1)
 
 @click.group()
 def main():
@@ -64,14 +64,14 @@ def download_data():
             subst = subst_link_el.get_attribute('innerHTML')
             if is_vax_subst(subst):
                 # filter years that need to be done
-                years = [
+                years = sorted(
                     year
                     for year in YEARS_RANGE
                     if (
                         not os.path.exists(_ofpath(subst, year, "csv"))
                         and not os.path.exists(_ofpath(subst, year, "noData"))
                     )
-                ]
+                )
                 if not years:
                     continue
                 subst_link_el.click()
@@ -80,13 +80,14 @@ def download_data():
                     linelist_el = wait_el(lambda: find_el(driver, 'td[title="Line Listing"]'))
                     linelist_el.click()
                     # choose year
-                    year_input_title = "2021"
+                    year_input_title = YEARS_RANGE[-1]
                     for year in years:
                         year_inputs = wait_el(lambda: find_el(driver, f'input[title="{year_input_title}"]'))
+                        time.sleep(1)
                         year_inputs.click()
                         year_input = wait_el(lambda: find_el(driver, f'.promptMenuOption[title="{year}"]'))
                         year_input.click()
-                        year_input_title = str(year)
+                        year_input_title = year
                         time.sleep(1)
                         run_but = find_el(driver, 'a[name="SectionElements"]')
                         run_but.click()
@@ -110,7 +111,7 @@ def download_data():
                             except NoDataError:
                                 open(_ofpath(subst, year, "noData"), 'a').close()
                                 continue
-                            fname = wait_download(timeout=300)
+                            fname = wait_download(timeout=3600 if "COVID" in subst else 300)
                             shutil.move(
                                 os.path.join(DOWNLOAD_DIR, fname),
                                 _ofpath(subst, year, "csv")
@@ -242,58 +243,63 @@ def import_data():
         for fname in os.listdir(DATA_DIR):
             basefname, fext = os.path.splitext(fname)
             if fext != '.csv': continue
-            pos = basefname.rfind('_')
-            subst = basefname[:pos]
-            year = int(basefname[pos+1:])
-            row = conn.cursor().execute(
-                '''SELECT COUNT(*) FROM reports WHERE subst=? AND year=?''',
-                [subst, year]
-            ).fetchone()
-            if row[0] > 0:
-                continue
-            with open(os.path.join(DATA_DIR, fname)) as csvfile:
-                reader = csv.DictReader(csvfile)
-                reports_rows, reactions_rows = [], []
-                def _insert():
-                    nonlocal reports_rows, reactions_rows
-                    db_bulk_insert(conn, "reports", reports_rows)
-                    db_bulk_insert(conn, "reactions", reactions_rows)
+            try:
+                pos = basefname.rfind('_')
+                subst = basefname[:pos]
+                year = int(basefname[pos+1:])
+                row = conn.cursor().execute(
+                    '''SELECT COUNT(*) FROM reports WHERE subst=? AND year=?''',
+                    [subst, year]
+                ).fetchone()
+                if row[0] > 0:
+                    continue
+                with open(os.path.join(DATA_DIR, fname)) as csvfile:
+                    reader = csv.DictReader(csvfile)
                     reports_rows, reactions_rows = [], []
-                for row in reader:
-                    reactions = row["Reaction List PT (Duration – Outcome - Seriousness Criteria)"]
-                    severe, death = False, False
-                    if reactions:
-                        reactions = reactions.split(",<BR><BR>")
-                        for reaction in reactions:
-                            reaction = reaction.strip()
-                            _type = reaction[:reaction.rfind('(')]
-                            other = reaction[reaction.rfind('(')+1:reaction.rfind(')')]
-                            duration, outcome, seriousness = other.split("-")
-                            reactions_rows.append({
-                                "subst": subst,
-                                "year": year,
-                                "report_id": row["\ufeff\ufeffEU Local Number"],
-                                "type": _type.strip(),
-                                "duration": duration.strip(),
-                                "outcome": outcome.strip(),
-                                "seriousness": seriousness.strip(),
-                            })
-                            death = death or ("Results in Death" in seriousness)
-                            severe = death or severe or ("Life Threatening" in seriousness) or ("Caused/Prolonged Hospitalisation" in seriousness)
-                    reports_rows.append({
-                        "subst": subst,
-                        "year": year,
-                        "report_id": row["\ufeff\ufeffEU Local Number"],
-                        "date": row["EV Gateway Receipt Date"],
-                        "age_group": row["Patient Age Group"],
-                        "sex": row["Patient Sex"],
-                        "is_c19_vax": ("COVID_19" in subst),
-                        "severe": severe,
-                        "death": death
-                    })
-                    if len(reports_rows) >= 100:
-                        _insert()
-                _insert()
+                    def _insert():
+                        nonlocal reports_rows, reactions_rows
+                        db_bulk_insert(conn, "reports", reports_rows)
+                        db_bulk_insert(conn, "reactions", reactions_rows)
+                        reports_rows, reactions_rows = [], []
+                    for row in reader:
+                        eulocalnumber_key = next(k for k in row.keys() if "Local Number" in k)
+                        reactions = row["Reaction List PT (Duration – Outcome - Seriousness Criteria)"]
+                        severe, death = False, False
+                        if reactions:
+                            reactions = reactions.split(",<BR><BR>")
+                            for reaction in reactions:
+                                reaction = reaction.strip()
+                                _type = reaction[:reaction.rfind('(')]
+                                other = reaction[reaction.rfind('(')+1:reaction.rfind(')')]
+                                duration, outcome, seriousness = other.split("-")
+                                reactions_rows.append({
+                                    "subst": subst,
+                                    "year": year,
+                                    "report_id": row[eulocalnumber_key],
+                                    "type": _type.strip(),
+                                    "duration": duration.strip(),
+                                    "outcome": outcome.strip(),
+                                    "seriousness": seriousness.strip(),
+                                })
+                                death = death or ("Results in Death" in seriousness)
+                                severe = death or severe or ("Life Threatening" in seriousness) or ("Caused/Prolonged Hospitalisation" in seriousness)
+                        reports_rows.append({
+                            "subst": subst,
+                            "year": year,
+                            "report_id": row[eulocalnumber_key],
+                            "date": row["EV Gateway Receipt Date"],
+                            "age_group": row["Patient Age Group"],
+                            "sex": row["Patient Sex"],
+                            "is_c19_vax": ("COVID_19" in subst),
+                            "severe": severe,
+                            "death": death
+                        })
+                        if len(reports_rows) >= 100:
+                            _insert()
+                    _insert()
+            except:
+                print(f"ERROR with file {fname}")
+                raise
 
 def db_bulk_insert(conn, table_name, values):
     if len(values) == 0:
@@ -313,11 +319,13 @@ def cmd_plot_reactions_by_year_c19(severe, death, aged_65_and_more):
 
 def plot_reactions_by_year_c19(severe=False, death=False, aged_65_and_more=False):
     plt.clf()
-    title = "[EudraVigilance] Nombre de réactions post-vaccinales"
-    if severe: title += ", sévères"
-    if death: title += ", morts"
-    if aged_65_and_more: title += ", 65 ans et +"
-    plt.title(title)
+    plt.suptitle(", ".join(filter(None, [
+        "Nombre de réactions post-vaccinales",
+        "sévères" if severe else None,
+        "morts" if death else None,
+        "65 ans et +" if aged_65_and_more else None,
+    ])))
+    plt.title("Source: EudraVigilance", fontsize=10)
     with db_connect() as conn:
         req = 'SELECT subst, year, is_c19_vax, COUNT(*) FROM reports '
         wheres = []
@@ -329,7 +337,7 @@ def plot_reactions_by_year_c19(severe=False, death=False, aged_65_and_more=False
         req += ' GROUP BY subst, year, is_c19_vax'
         rows = conn.cursor().execute(req)
         def _get_label(subst, is_c19_vax):
-            if not is_c19_vax: return "Tous les autres vaccins (non Covid19)"
+            if not is_c19_vax: return 'Tous les autres vaccins cumulés (non Covid19)'
             elif 'ASTRAZENECA' in subst: return 'Astrazeneca'
             elif 'MODERNA' in subst: return 'Moderna'
             elif 'PFIZER' in subst: return 'Pfizer'
@@ -339,7 +347,7 @@ def plot_reactions_by_year_c19(severe=False, death=False, aged_65_and_more=False
         for subst, year, is_c19_vax, nb in rows:
             res[_get_label(subst, is_c19_vax)][year] += nb
         years = range(2010, 2021+1)
-        labels = ['Tous les autres vaccins (non Covid19)', 'Astrazeneca', 'Moderna', 'Pfizer', 'Janssen']
+        labels = ['Tous les autres vaccins cumulés (non Covid19)', 'Astrazeneca', 'Moderna', 'Pfizer', 'Janssen']
         cum_bars = _cum_bars(years, labels, res)
         for label in reversed(labels):
             plt.bar(years, [cum_bars[label].get(year,0) for year in years], label=label)
